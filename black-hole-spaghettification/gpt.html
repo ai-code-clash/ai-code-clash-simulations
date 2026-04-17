@@ -1,1 +1,128 @@
+<!DOCTYPE html>
 
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Black Hole Simulation</title>
+<style>
+html, body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #02030a;
+}
+canvas {
+  display: block;
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+
+const particles = [];
+const maxParticles = 220;
+
+let cx, cy, horizon, outer, gm;
+
+function resize() {
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+cx = canvas.width / 2;
+cy = canvas.height / 2;
+
+const min = Math.min(canvas.width, canvas.height);
+horizon = min * 0.08;
+outer = min * 0.45;
+gm = min * min * 0.02;
+
+particles.length = 0;
+for (let i = 0; i < maxParticles; i++) {
+spawnParticle();
+}
+}
+
+function spawnParticle() {
+const angle = Math.random() * Math.PI * 2;
+const radius = outer * (0.6 + Math.random() * 0.4);
+
+const x = cx + Math.cos(angle) * radius;
+const y = cy + Math.sin(angle) * radius;
+
+const speed = Math.sqrt(gm / radius);
+
+particles.push({
+x,
+y,
+vx: -Math.sin(angle) * speed,
+vy:  Math.cos(angle) * speed,
+size: 1 + Math.random() * 3
+});
+}
+
+function update(p) {
+const dx = cx - p.x;
+const dy = cy - p.y;
+const r = Math.sqrt(dx*dx + dy*dy) + 0.0001;
+
+const force = gm / (r * r);
+
+p.vx += (dx / r) * force * 0.01;
+p.vy += (dy / r) * force * 0.01;
+
+p.x += p.vx;
+p.y += p.vy;
+
+if (r < horizon || r > outer * 1.2) {
+p.x = cx + Math.random() * outer - outer/2;
+p.y = cy + Math.random() * outer - outer/2;
+}
+}
+
+function drawParticle(p) {
+const dx = cx - p.x;
+const dy = cy - p.y;
+const r = Math.sqrt(dx*dx + dy*dy);
+
+const intensity = Math.max(0, 1 - r / outer);
+
+const color = `rgba(${255}, ${150 + intensity*100}, ${80}, ${0.4 + intensity})`;
+
+ctx.beginPath();
+ctx.fillStyle = color;
+ctx.arc(p.x, p.y, p.size * (1 + intensity * 2), 0, Math.PI * 2);
+ctx.fill();
+}
+
+function drawBlackHole() {
+ctx.beginPath();
+ctx.fillStyle = "black";
+ctx.arc(cx, cy, horizon, 0, Math.PI * 2);
+ctx.fill();
+}
+
+function loop() {
+requestAnimationFrame(loop);
+
+ctx.fillStyle = "rgba(2,4,11,0.25)";
+ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+for (let p of particles) {
+update(p);
+drawParticle(p);
+}
+
+drawBlackHole();
+}
+
+window.addEventListener("resize", resize);
+
+resize();
+loop(); </script>
+
+</body>
+</html>
