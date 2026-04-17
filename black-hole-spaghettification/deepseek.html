@@ -1,1 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Black Hole Spaghettification</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: black;
+            font-family: 'Arial', sans-serif;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <script>
+        (function() {
+            "use strict";
 
+            // ----- CANVAS SETUP -----
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d', { alpha: true, antialias: true });
+            
+            let width, height, centerX, centerY;
+            
+            function resizeCanvas() {
+                width = window.innerWidth;
+                height = window.innerHeight;
+                canvas.width = width;
+                canvas.height = height;
+                centerX = width * 0.5;
+                centerY = height * 0.5;
+            }
+            window.addEventListener('resize', resizeCanvas);
+            resizeCanvas();
+
+            // ----- PHYSICS CONSTANTS -----
+            const G = 0.65;              // gravitational constant (scaled for visuals)
+            const BH_MASS = 4200;         // black hole mass
+            const EVENT_HORIZON = 22;     // radius of event horizon (pixels)
+            const SOFTENING = 4.0;        // prevents extreme acceleration very close (but we reset before)
+            
+            // Spaghettification / stretching parameters
+            const BASE_SIZE = 3.5;         // base particle size
+            const TIDAL_STRENGTH = 9500;   // controls stretch amount (higher = more stretch)
+            const MAX_STRETCH = 58;        // maximum stretch length in pixels
+            
+            // Accretion disk parameters
+            const DISK_INNER = 38;
+            const DISK_OUTER = 210;
+            const DISK_DRAG = 0.9992;      // slight energy loss -> spiraling inward
+            const DISK_COUNT = 550;
+            
+            // Spiral objects (debris / stars) that visibly stretch
+            const SPIRAL_COUNT = 72;
+            
+            // Color mapping
+            const COLOR_FAR = { r: 70, g: 130, b: 255 };   // cool blue
+            const COLOR_MID = { r: 200, g: 80, b: 220 };   // purple
+            const COLOR_NEAR = { r: 255, g: 160, b: 50 };  // hot orange
+            const COLOR_HOT = { r: 255, g: 220, b: 100 };  // yellow-white near horizon
+            
+            // ----- GLOBAL STATE -----
+            // Starfield background (static points)
+            const stars = [];
+            const STAR_COUNT = 400;
+            
+            // Particle pools (reused objects, no allocations in loop)
+            const spiralObjects = [];
+            const diskParticles = [];
+            
+            // Pre-allocate vectors to avoid garbage
+            const tempVec = { x: 0, y: 0 };
+            
+            // ----- HELPER: RESET PARTICLE TO OUTER REGION (recycling) -----
+            function resetParticle(p, isSpiral = true) {
+                // Random angle and radius (outer region)
+                const angle = Math.random() * Math.PI * 2;
+                const radius = 190 + Math.random() * 200; // between 190 and 390 px
+                
+                p.x = centerX + Math.cos(angle) * radius;
+                p.y = centerY + Math.sin(angle) * radius;
+                
+                // Compute direction to black hole
+                const dx = centerX - p.x;
+                const dy = centerY - p.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                
+                // Keplerian circular orbit speed: v = sqrt(G*M / r)
+                const orbitSpeed = Math.sqrt(G * BH_MASS / dist);
+                
+                // Tangential direction (perpendicular to radius)
+                const tx = -dy / dist;
+                const ty = dx / dist;
+                
+                // Add some random radial perturbation to create elliptical/spiral paths
+                const radialPerturb = (Math.random() - 0.5) * orbitSpeed * 0.25;
+                const tangentialPerturb = (Math.random() - 0.5) * orbitSpeed * 0.12;
+                
+                // Set velocity: mostly tangential, plus small radial
+                p.vx = tx * (orbitSpeed + tangentialPerturb) + (dx / dist) * radialPerturb;
+                p.vy = ty * (orbitSpeed + tangentialPerturb) + (dy / dist) * radialPerturb;
+                
+                // Additional properties for spiral objects (stretching)
+                if (isSpiral) {
+                    p.stretchLength = BASE_SIZE;
+                    p.glowIntensity = 0.7;
+                }
+            }
+            
+            // ----- INITIALIZATION -----
+            function init() {
+                // Generate static starfield
+                for (let i = 0; i < STAR_COUNT; i++) {
+                    stars.push({
+                        x: Math.random() * width,
+                        y: Math.random() * height,
+                        size: Math.random() * 2.2 + 0.8,
+                        brightness: Math.random() * 0.7 + 0.3
+                    });
+                }
+                
+                // Create spiral objects (the ones that stretch)
+                for (let i = 0; i < SPIRAL_COUNT; i++) {
+                    const obj = {
+                        x: 0, y: 0,
+                        vx: 0, vy: 0,
+                        stretchLength: BASE_SIZE,
+                        glowIntensity: 0.8
+                    };
+                    resetParticle(obj, true);
+                    spiralObjects.push(obj);
+                }
+                
+                // Create accretion disk particles
+                for (let i = 0; i < DISK_COUNT; i++) {
+                    const p = {
+                        x: 0, y: 0,
+                        vx: 0, vy: 0
+                    };
+                    // Initialize within disk region
+                    const angle = Math.random() * Math.PI * 2;
+                    const radius = DISK_INNER + Math.random() * (DISK_OUTER - DISK_INNER);
+                    p.x = centerX + Math.cos(angle) * radius;
+                    p.y = centerY + Math.sin(angle) * radius;
+                    
+                    const dx = centerX - p.x;
+                    const dy = centerY - p.y;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    const orbitSpeed = Math.sqrt(G * BH_MASS / dist);
+                    
+                    const tx = -dy / dist;
+                    const ty = dx / dist;
+                    
+                    // Slight perturbations for natural look
+                    p.vx = tx * orbitSpeed * (0.98 + Math.random() * 0.04);
+                    p.vy = ty * orbitSpeed * (0.98 + Math.random() * 0.04);
+                    
+                    diskParticles.push(p);
+                }
+            }
+            
+            // ----- UPDATE PHYSICS -----
+            function update() {
+                // Helper to apply gravity and update position/velocity
+                function applyGravity(p, dt) {
+                    const dx = centerX - p.x;
+                    const dy = centerY - p.y;
+                    const distSq = dx*dx + dy*dy + SOFTENING;
+                    const dist = Math.sqrt(distSq);
+                    
+                    // Gravitational acceleration magnitude
+                    const accelMag = (G * BH_MASS) / distSq;
+                    const ax = (dx / dist) * accelMag;
+                    const ay = (dy / dist) * accelMag;
+                    
+                    // Semi-implicit Euler
+                    p.vx += ax * dt;
+                    p.vy += ay * dt;
+                    p.x += p.vx * dt;
+                    p.y += p.y * dt;
+                }
+                
+                const dt = 0.9; // time step factor for smooth motion
+                
+                // 1. Update spiral objects (with stretching logic)
+                for (let i = 0; i < spiralObjects.length; i++) {
+                    const obj = spiralObjects[i];
+                    
+                    applyGravity(obj, dt);
+                    
+                    // Distance to black hole
+                    const dx = obj.x - centerX;
+                    const dy = obj.y - centerY;
+                    const r = Math.sqrt(dx*dx + dy*dy);
+                    
+                    // Reset if crossed event horizon
+                    if (r < EVENT_HORIZON) {
+                        resetParticle(obj, true);
+                        continue;
+                    }
+                    
+                    // Compute stretch factor based on tidal forces (r^-3 dependence)
+                    const tidal = TIDAL_STRENGTH / (r * r * r + 10);
+                    const stretchFactor = Math.min(MAX_STRETCH / BASE_SIZE - 1, tidal);
+                    obj.stretchLength = BASE_SIZE * (1 + stretchFactor);
+                    
+                    // Glow intensity increases as distance decreases
+                    obj.glowIntensity = Math.min(1.0, 0.55 + 0.45 * (1 - Math.min(1, (r - EVENT_HORIZON) / 180)));
+                }
+                
+                // 2. Update accretion disk particles
+                for (let i = 0; i < diskParticles.length; i++) {
+                    const p = diskParticles[i];
+                    
+                    applyGravity(p, dt);
+                    
+                    // Apply small drag to simulate accretion (energy loss)
+                    p.vx *= DISK_DRAG;
+                    p.vy *= DISK_DRAG;
+                    
+                    const dx = p.x - centerX;
+                    const dy = p.y - centerY;
+                    const r = Math.sqrt(dx*dx + dy*dy);
+                    
+                    // Reset if too close to black hole or too far out (recycle)
+                    if (r < EVENT_HORIZON || r > width * 0.9) {
+                        // Reinitialize in disk region
+                        const angle = Math.random() * Math.PI * 2;
+                        const radius = DISK_INNER + Math.random() * (DISK_OUTER - DISK_INNER);
+                        p.x = centerX + Math.cos(angle) * radius;
+                        p.y = centerY + Math.sin(angle) * radius;
+                        
+                        const ndx = centerX - p.x;
+                        const ndy = centerY - p.y;
+                        const ndist = Math.sqrt(ndx*ndx + ndy*ndy);
+                        const orbitSpeed = Math.sqrt(G * BH_MASS / ndist);
+                        const tx = -ndy / ndist;
+                        const ty = ndx / ndist;
+                        
+                        p.vx = tx * orbitSpeed * (0.96 + Math.random() * 0.08);
+                        p.vy = ty * orbitSpeed * (0.96 + Math.random() * 0.08);
+                    }
+                }
+            }
+            
+            // ----- RENDERING -----
+            function draw() {
+                ctx.clearRect(0, 0, width, height);
+                
+                // 1. Starfield background
+                ctx.shadowBlur = 0; // disable shadow for stars
+                stars.forEach(s => {
+                    ctx.fillStyle = `rgba(255, 240, 200, ${s.brightness})`;
+                    ctx.beginPath();
+                    ctx.arc(s.x, s.y, s.size * 0.5, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+                
+                // 2. Accretion disk glow (ambient, behind particles)
+                const gradient = ctx.createRadialGradient(centerX, centerY, EVENT_HORIZON * 0.5, centerX, centerY, DISK_OUTER + 40);
+                gradient.addColorStop(0, 'rgba(255, 160, 40, 0.12)');
+                gradient.addColorStop(0.4, 'rgba(180, 70, 220, 0.08)');
+                gradient.addColorStop(0.8, 'rgba(70, 100, 255, 0.04)');
+                gradient.addColorStop(1, 'transparent');
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, DISK_OUTER + 50, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // 3. Draw accretion disk particles (glowing dots, with additive-like appearance)
+                ctx.shadowBlur = 12;
+                diskParticles.forEach(p => {
+                    const dx = p.x - centerX;
+                    const dy = p.y - centerY;
+                    const r = Math.sqrt(dx*dx + dy*dy);
+                    
+                    // Color based on distance: inner hotter, outer cooler
+                    const t = Math.max(0, Math.min(1, (r - DISK_INNER) / (DISK_OUTER - DISK_INNER)));
+                    
+                    // Interpolate between hot (inner) and blue/purple (outer)
+                    const rCol = Math.floor(COLOR_NEAR.r * (1 - t) + COLOR_MID.r * t * 0.7 + COLOR_FAR.r * t * 0.3);
+                    const gCol = Math.floor(COLOR_NEAR.g * (1 - t) + COLOR_MID.g * t * 0.6 + COLOR_FAR.g * t * 0.4);
+                    const bCol = Math.floor(COLOR_NEAR.b * (1 - t) + COLOR_MID.b * t * 0.8 + COLOR_FAR.b * t * 0.2);
+                    
+                    const alpha = 0.75 + 0.25 * Math.sin(r * 0.05 + Date.now() * 0.002);
+                    
+                    ctx.shadowColor = `rgb(${rCol}, ${gCol}, ${bCol})`;
+                    ctx.fillStyle = `rgba(${rCol}, ${gCol}, ${bCol}, ${alpha})`;
+                    
+                    ctx.beginPath();
+                    // size varies slightly with distance
+                    const size = 1.8 + 2.0 * (1 - t);
+                    ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+                
+                // 4. Draw spiral objects (stretched, glowing)
+                spiralObjects.forEach(obj => {
+                    const dx = obj.x - centerX;
+                    const dy = obj.y - centerY;
+                    const r = Math.sqrt(dx*dx + dy*dy);
+                    
+                    if (r < 1) return;
+                    
+                    // Normalized radial direction (pointing outward from black hole)
+                    const nx = dx / r;
+                    const ny = dy / r;
+                    
+                    // Determine color based on distance
+                    const t = Math.max(0, Math.min(1, (r - EVENT_HORIZON) / 220));
+                    let rCol, gCol, bCol;
+                    if (t > 0.7) {
+                        const s = (t - 0.7) / 0.3;
+                        rCol = Math.floor(COLOR_FAR.r * s + COLOR_MID.r * (1 - s));
+                        gCol = Math.floor(COLOR_FAR.g * s + COLOR_MID.g * (1 - s));
+                        bCol = Math.floor(COLOR_FAR.b * s + COLOR_MID.b * (1 - s));
+                    } else if (t > 0.3) {
+                        const s = (t - 0.3) / 0.4;
+                        rCol = Math.floor(COLOR_MID.r * s + COLOR_NEAR.r * (1 - s));
+                        gCol = Math.floor(COLOR_MID.g * s + COLOR_NEAR.g * (1 - s));
+                        bCol = Math.floor(COLOR_MID.b * s + COLOR_NEAR.b * (1 - s));
+                    } else {
+                        const s = t / 0.3;
+                        rCol = Math.floor(COLOR_NEAR.r * s + COLOR_HOT.r * (1 - s));
+                        gCol = Math.floor(COLOR_NEAR.g * s + COLOR_HOT.g * (1 - s));
+                        bCol = Math.floor(COLOR_NEAR.b * s + COLOR_HOT.b * (1 - s));
+                    }
+                    
+                    const intensity = obj.glowIntensity;
+                    const glowAlpha = 0.8 * intensity;
+                    
+                    // Draw stretched line (spaghettification effect)
+                    const halfLen = obj.stretchLength * 0.5;
+                    const startX = obj.x - nx * halfLen;
+                    const startY = obj.y - ny * halfLen;
+                    const endX = obj.x + nx * halfLen;
+                    const endY = obj.y + ny * halfLen;
+                    
+                    ctx.shadowBlur = 22 * intensity;
+                    ctx.shadowColor = `rgb(${rCol}, ${gCol}, ${bCol})`;
+                    
+                    // Core line (bright)
+                    ctx.beginPath();
+                    ctx.moveTo(startX, startY);
+                    ctx.lineTo(endX, endY);
+                    ctx.strokeStyle = `rgba(${rCol}, ${gCol}, ${bCol}, ${glowAlpha})`;
+                    ctx.lineWidth = 2.2 + 2.0 * intensity;
+                    ctx.lineCap = 'round';
+                    ctx.stroke();
+                    
+                    // Additional glow pass (thinner, brighter)
+                    ctx.shadowBlur = 28 * intensity;
+                    ctx.beginPath();
+                    ctx.moveTo(startX, startY);
+                    ctx.lineTo(endX, endY);
+                    ctx.strokeStyle = `rgba(255, 255, 255, ${0.7 * intensity})`;
+                    ctx.lineWidth = 1.2;
+                    ctx.stroke();
+                    
+                    // Draw a small core dot at center for extra brilliance
+                    ctx.shadowBlur = 20 * intensity;
+                    ctx.beginPath();
+                    ctx.arc(obj.x, obj.y, 2.0 + 1.5 * intensity, 0, Math.PI*2);
+                    ctx.fillStyle = `rgba(255, 240, 200, ${intensity})`;
+                    ctx.fill();
+                });
+                
+                // 5. Black hole (event horizon) with intense glow
+                ctx.shadowBlur = 45;
+                ctx.shadowColor = '#ff8833';
+                
+                // Outer glow
+                const bhGrad = ctx.createRadialGradient(centerX-4, centerY-4, 5, centerX, centerY, EVENT_HORIZON + 18);
+                bhGrad.addColorStop(0, '#331100');
+                bhGrad.addColorStop(0.5, '#110500');
+                bhGrad.addColorStop(1, '#000000');
+                ctx.fillStyle = bhGrad;
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, EVENT_HORIZON + 12, 0, Math.PI*2);
+                ctx.fill();
+                
+                // Event horizon (pure black)
+                ctx.shadowBlur = 35;
+                ctx.shadowColor = '#ff6600';
+                ctx.fillStyle = '#000000';
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, EVENT_HORIZON, 0, Math.PI*2);
+                ctx.fill();
+                
+                // Intense inner ring (photon sphere effect)
+                ctx.shadowBlur = 30;
+                ctx.shadowColor = '#ffaa33';
+                ctx.strokeStyle = 'rgba(255, 180, 70, 0.45)';
+                ctx.lineWidth = 2.5;
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, EVENT_HORIZON + 2.5, 0, Math.PI*2);
+                ctx.stroke();
+                
+                // Reset shadow
+                ctx.shadowBlur = 0;
+                ctx.shadowColor = 'transparent';
+                
+                // Tiny bright center
+                ctx.fillStyle = '#220800';
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, EVENT_HORIZON * 0.45, 0, Math.PI*2);
+                ctx.fill();
+            }
+            
+            // ----- ANIMATION LOOP -----
+            function animate() {
+                update();
+                draw();
+                requestAnimationFrame(animate);
+            }
+            
+            // Initialize and start
+            init();
+            animate();
+            
+            // Handle canvas resize updates for starfield reposition (optional: regenerate stars)
+            window.addEventListener('resize', () => {
+                resizeCanvas();
+                // Regenerate stars for new dimensions
+                stars.length = 0;
+                for (let i = 0; i < STAR_COUNT; i++) {
+                    stars.push({
+                        x: Math.random() * width,
+                        y: Math.random() * height,
+                        size: Math.random() * 2.2 + 0.8,
+                        brightness: Math.random() * 0.7 + 0.3
+                    });
+                }
+                // Recenter black hole variables already updated
+                centerX = width * 0.5;
+                centerY = height * 0.5;
+            });
+            
+        })();
+    </script>
+</body>
+</html>
